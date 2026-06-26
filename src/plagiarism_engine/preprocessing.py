@@ -1,7 +1,7 @@
 import math
 import re
 from collections import Counter
-from typing import Any, List
+from typing import List
 
 STOPWORDS = {
     "a",
