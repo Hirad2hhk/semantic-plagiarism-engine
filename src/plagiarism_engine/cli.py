@@ -1,269 +1,317 @@
 import json
 import os
-
+import time
+from typing import Dict, List
 import click
 import pandas as pd
+import numpy as np
 
-from src.plagiarism_engine.dataset import load_corpus_directory
-from src.plagiarism_engine.lsh import LSH
-from src.plagiarism_engine.minhash import MinHashEngine
-from src.plagiarism_engine.preprocessing import generate_shingles, tokenize
-from src.plagiarism_engine.simhash import SimHashEngine
+from plagiarism_engine.dataset import load_corpus_directory
+from plagiarism_engine.lsh import LSH
+from plagiarism_engine.minhash import MinHashEngine
+from plagiarism_engine.preprocessing import generate_shingles, tokenize
+from plagiarism_engine.simhash import SimHashEngine
+
+
+def compute_tfidf_weights(docs_content: List[str]) -> Dict[str, float]:
+    """
+    Helper function to calculate Inverse Document Frequency (IDF) weights 
+    for words across a provided collection of text documents.
+    """
+    doc_frequencies = {}
+    total_docs = len(docs_content)
+    
+    if total_docs == 0:
+        return {}
+
+    for content in docs_content:
+        tokens = set(tokenize(content))
+        for token in tokens:
+            doc_frequencies[token] = doc_frequencies.get(token, 0) + 1
+
+    # Compute IDF: ln(Total Documents / Document Frequency containing term)
+    tfidf_weights = {}
+    for token, df in doc_frequencies.items():
+        tfidf_weights[token] = float(np.log(total_docs / df) + 1.0)
+        
+    return tfidf_weights
 
 
 @click.group()
 def cli():
-    """Plagiarism Detection CLI"""
+    """Plagiarism and Near-Duplicate Detection Engine CLI """
+    pass
+
+
+@cli.command("train-weights")
+@click.option("--data", required=True, help="Directory containing the background corpus ")
+@click.option("--output", default="data/processed/tfidf_weights.json", help="Path to save vocabulary weights")
+def train_weights(data, output):
+    """
+    [EXTRA COMMAND] Pre-calculates corpus-wide IDF weights from a raw directory 
+    to drive high-fidelity TF-IDF weighting inside the SimHash pipeline.
+    """
+    click.echo(f"Scanning background corpus at: {data}...")
+    docs = load_corpus_directory(data)
+    click.echo(f"Loaded {len(docs)} files. Extracting tokens and compiling global vocabulary frequencies...")
+    
+    contents = list(docs.values())
+    weights = compute_tfidf_weights(contents)
+    
+    os.makedirs(os.path.dirname(output), exist_ok=True)
+    with open(output, "w", encoding="utf-8") as f:
+        json.dump(weights, f, indent=2)
+        
+    click.echo(f"Successfully calculated weights for {len(weights)} terms. Saved to {output}")
 
 
 @cli.command("compare")
 @click.option("--file-a", required=True, help="Path to first text file")
 @click.option("--file-b", required=True, help="Path to second text file")
+@click.option("--weights-path", default=None, help="Optional path to precomputed tfidf json weights")
 @click.option("--output", default="-", help="Output results JSON (- for stdout)")
-def compare(file_a, file_b, output):
-    """Compare two text files"""
+def compare(file_a, file_b, weights_path, output):
+    """Compare two individual text files using both Path 1 and Path 2 algorithms """
 
-    # Read the content of both files
-    with open(file_a, "r", encoding="utf-8") as f:
+    with open(file_a, "r", encoding="utf-8", errors="ignore") as f:
         content_a = f.read()
-
-    with open(file_b, "r", encoding="utf-8") as f:
+    with open(file_b, "r", encoding="utf-8", errors="ignore") as f:
         content_b = f.read()
 
-    # Preprocess and tokenize
     tokens_a = tokenize(content_a)
     tokens_b = tokenize(content_b)
 
-    # Generate shingles
     shingles_a = generate_shingles(tokens_a, k=3)
     shingles_b = generate_shingles(tokens_b, k=3)
 
-    # Compute MinHash signatures
+    # ---- PATH 1: MINHASH ----
     minhash_engine = MinHashEngine()
     sig_a = minhash_engine.compute_signature(shingles_a)
     sig_b = minhash_engine.compute_signature(shingles_b)
+    minhash_sim = minhash_engine.estimate_similarity(sig_a, sig_b)
 
-    # Estimate similarity
-    estimated_similarity = minhash_engine.estimate_similarity(sig_a, sig_b)
+    # ---- PATH 2: TF-IDF SIMHASH ----
+    tfidf_weights = None
+    if weights_path and os.path.exists(weights_path):
+        with open(weights_path, "r", encoding="utf-8") as f:
+            tfidf_weights = json.load(f)
+            
+    simhash_engine = SimHashEngine(tfidf_weights=tfidf_weights)
+    fp_a = simhash_engine.compute_fingerprint(tokens_a)
+    fp_b = simhash_engine.compute_fingerprint(tokens_b)
+    
+    # SimHash Similarity = 1.0 - Normalised Hamming Distance 
+    h_dist = simhash_engine.hamming_distance(fp_a, fp_b)
+    simhash_sim = 1.0 - h_dist
 
-    # Create results
     results = {
-        "file_a": file_a,
-        "file_b": file_b,
-        "estimated_similarity": estimated_similarity,
-        "shingles_a_count": len(shingles_a),
-        "shingles_b_count": len(shingles_b),
+        "metadata": {
+            "file_a": file_a,
+            "file_b": file_b,
+            "tokens_a": len(tokens_a),
+            "tokens_b": len(tokens_b)
+        },
+        "path1_minhash": {
+            "estimated_jaccard": round(minhash_sim, 4)
+        },
+        "path2_simhash": {
+            "hamming_distance": round(h_dist, 4),
+            "cosine_similarity_estimate": round(simhash_sim, 4)
+        }
     }
 
-    # Output results
     if output == "-":
         print(json.dumps(results, indent=2))
     else:
-        # Ensure directory exists
         os.makedirs(os.path.dirname(output), exist_ok=True)
         with open(output, "w") as f:
             json.dump(results, f, indent=2)
-
-        # Also print the results to the terminal for visibility
         click.echo(json.dumps(results, indent=2))
         click.echo(f"Results saved to {output}")
 
 
 @cli.command("corpus")
-@click.option("--data", required=True, help="Directory of text files")
-@click.option(
-    "--threshold",
-    type=float,
-    default=0.8,
-    help="Similarity threshold for candidate pairs",
-)
-@click.option("--shingle-size", type=int, default=3, help="Shingle window size")
-@click.option(
-    "--output", required=True, help="CSV output file path for candidate pairs"
-)
-def corpus(data, threshold, shingle_size, output):
-    """Analyze entire text corpus"""
-
-    # Load all documents from directory
+@click.option("--data", required=True, help="Directory of text files ")
+@click.option("--threshold", type=float, default=0.25, help="Similarity threshold ")
+@click.option("--shingle-size", type=int, default=3, help="Shingle size ")
+@click.option("--engine", type=click.Choice(['minhash', 'simhash', 'both']), default='minhash', help="Which engine pipeline to use")
+@click.option("--weights-path", default="data/processed/tfidf_weighs.json", help="Path to json file holding TF-IDF lookup data")
+@click.option("--output", required=True, help="CSV output file path ")
+def corpus(data, threshold, shingle_size, engine, weights_path, output):
+    """Analyze entire directory to map candidate matches """
     docs = load_corpus_directory(data)
-    click.echo(f"Loaded {len(docs)} documents")
+    click.echo(f"Loaded {len(docs)} documents ")
 
-    # Create MinHash engine
-    minhash_engine = MinHashEngine()
-
-    # Build LSH structure
-    lsh = LSH(threshold=threshold, signature_len=128)
-    # Process each document
-    doc_signatures = {}
-    debug_count = 0
-    for doc_id, content in docs.items():
-        tokens = tokenize(content)
-        shingles = generate_shingles(tokens, k=shingle_size)
-        if debug_count < 3:
-            click.echo(f"\n--- DEBUGGING FOR {doc_id} ---")
-            click.echo(f"Raw character length: {len(content)}")
-            click.echo(f"Tokens generated: {len(tokens)} -> Sample: {tokens[:5]}")
-            click.echo(f"Shingles generated: {len(shingles)}")
-            signature = minhash_engine.compute_signature(shingles)
-            click.echo(f"Signature sample: {signature[:5]}")
-            debug_count += 1
+    # Resolve TF-IDF if SimHash requested
+    tfidf_weights = None
+    if engine in ['simhash', 'both']:
+        if weights_path and os.path.exists(weights_path):
+            with open(weights_path, "r", encoding="utf-8") as f:
+                tfidf_weights = json.load(f)
         else:
-            # Compute signature
+            click.echo("Weights file not provided or not found. Computing TF-IDF inline from directory...")
+            tfidf_weights = compute_tfidf_weights(list(docs.values()))
+
+    results = []
+
+    # Process Path 1: MinHash + LSH 
+    if engine in ['minhash', 'both']:
+        click.echo("Executing Path 1: Initializing MinHash structural sub-band buckets...")
+        minhash_engine = MinHashEngine()
+        lsh = LSH(threshold=threshold, signature_len=128)
+        
+        for doc_id, content in docs.items():
+            tokens = tokenize(content)
+            shingles = generate_shingles(tokens, k=shingle_size)
             signature = minhash_engine.compute_signature(shingles)
-        doc_signatures[doc_id] = signature
+            lsh.add_document(doc_id, signature)
+            
+        minhash_pairs = lsh.get_candidate_pairs()
+        for doc_a, doc_b, sim in minhash_pairs:
+            results.append({"doc_a": doc_a, "doc_b": doc_b, "similarity": sim, "method": "MinHash+LSH"})
 
-        # Add to LSH structure
-        lsh.add_document(doc_id, signature)
+    # Process Path 2: All-Pairs SimHash 
+    if engine in ['simhash', 'both']:
+        click.echo("Executing Path 2: Constructing SimHash 64-bit signatures...")
+        simhash_engine = SimHashEngine(tfidf_weights=tfidf_weights)
+        fingerprints = {}
+        
+        for doc_id, content in docs.items():
+            tokens = tokenize(content)
+            fingerprints[doc_id] = simhash_engine.compute_fingerprint(tokens)
+            
+        click.echo("Performing proximity scan over fingerprint sets...")
+        doc_ids = list(docs.keys())
+        for i in range(len(doc_ids)):
+            for j in range(i + 1, len(doc_ids)):
+                id_a, id_b = doc_ids[i], doc_ids[j]
+                h_dist = simhash_engine.hamming_distance(fingerprints[id_a], fingerprints[id_b])
+                raw_sim = 1.0 - h_dist
+                calibrated_sim = max(0.0, (raw_sim - 0.5) * 2)
+                if calibrated_sim >= threshold:
+                                    results.append({
+                                        "doc_a": id_a, 
+                                        "doc_b": id_b, 
+                                        "similarity": round(calibrated_sim, 4), 
+                                        "method": "SimHash"
+                                    })
 
-    # Find candidate pairs
-    candidate_pairs = lsh.get_candidate_pairs()
-
-    # Write to CSV (this is where the issue was - we weren't writing any actual data)
-    if candidate_pairs:
-        results = []
-        for pair in candidate_pairs:
-            doc_a, doc_b, sim = pair
-            results.append({"doc_a": doc_a, "doc_b": doc_b, "similarity": sim})
-
+    if results:
         df = pd.DataFrame(results)
-        # Ensure directory exists
         os.makedirs(os.path.dirname(output), exist_ok=True)
         df.to_csv(output, index=False)
-        click.echo(f"Found {len(results)} candidate pairs, saved to {output}")
+        click.echo(f"Found {len(results)} candidate matches, exported to {output}")
     else:
-        click.echo("No candidate pairs found above threshold.")
-        # Create an empty CSV file with headers
-        df = pd.DataFrame(columns=["doc_a", "doc_b", "similarity"])
-        # Ensure directory exists
-        os.makedirs(os.path.dirname(output), exist_ok=True)
-        df.to_csv(output, index=False)
+        click.echo("No duplicates met your threshold criteria.")
+        pd.DataFrame(columns=["doc_a", "doc_b", "similarity", "method"]).to_csv(output, index=False)
 
 
 @cli.command("pairs")
-@click.option("--pairs", required=True, help="CSV file with text pairs and labels")
-@click.option("--text-col-a", default="text_a", help="Column name for first text field")
-@click.option(
-    "--text-col-b", default="text_b", help="Column name for second text field"
-)
-@click.option(
-    "--label-col", default="label", help="Column with ground truth labels (0/1)"
-)
-@click.option(
-    "--limit", type=int, default=None, help="Maximum number of records to evaluate"
-)
-@click.option("--output", required=True, help="Output CSV with evaluation results")
-def pairs(pairs, text_col_a, text_col_b, label_col, limit, output):
-    """Evaluate pairs dataset"""
-
-    # Load the CSV file
+@click.option("--pairs", required=True, help="CSV file with text fields and target tags ")
+@click.option("--threshold", type=float, default=0.7, help="Similarity boundary used for classification")
+@click.option("--text-col-a", default="text_a", help="Column key for first text field ")
+@click.option("--text-col-b", default="text_b", help="Column key for second text field ")
+@click.option("--label-col", default="label", help="Column tracking ground truth binary labels ")
+@click.option("--limit", type=int, default=None, help="Maximum number of rows to pull ")
+@click.option("--output", required=True, help="Detailed predictions target path ")
+def pairs(pairs, threshold, text_col_a, text_col_b, label_col, limit, output):
+    """Run an empirical side-by-side verification benchmark over both engineering paths """
     df = pd.read_csv(pairs)
-
     if limit is not None:
         df = df.sample(limit, random_state=42)
 
-    # Initialize metrics tracking
-    true_positives = 0
-    false_positives = 0
-    true_negatives = 0
-    false_negatives = 0
+    click.echo("Generating inline vocabulary index to balance SimHash execution...")
+    all_texts = df[text_col_a].dropna().tolist() + df[text_col_b].dropna().tolist()
+    tfidf_weights = compute_tfidf_weights(all_texts)
 
-    # Process each pair
-    results = []
+    minhash_engine = MinHashEngine()
+    simhash_engine = SimHashEngine(tfidf_weights=tfidf_weights)
+
+    # Performance metrics matrix configurations
+    stats = {
+        "minhash": {"tp": 0, "fp": 0, "fn": 0, "tn": 0, "time": 0.0},
+        "simhash": {"tp": 0, "fp": 0, "fn": 0, "tn": 0, "time": 0.0}
+    }
+
+    detailed_records = []
 
     for idx, row in df.iterrows():
-        text_a = row[text_col_a]
-        text_b = row[text_col_b]
+        text_a, text_b = str(row[text_col_a]), str(row[text_col_b])
         true_label = int(row[label_col])
 
-        # Preprocess and tokenize
-        tokens_a = tokenize(text_a)
-        tokens_b = tokenize(text_b)
-
-        # Generate shingles
+        tokens_a, tokens_b = tokenize(text_a), tokenize(text_b)
         shingles_a = generate_shingles(tokens_a, k=3)
         shingles_b = generate_shingles(tokens_b, k=3)
 
-        # Compute MinHash signatures
-        minhash_engine = MinHashEngine()
+        # ---- BENCHMARK MINHASH ----
+        t0 = time.perf_counter()
         sig_a = minhash_engine.compute_signature(shingles_a)
         sig_b = minhash_engine.compute_signature(shingles_b)
+        m_sim = minhash_engine.estimate_similarity(sig_a, sig_b)
+        stats["minhash"]["time"] += (time.perf_counter() - t0)
+        
+        m_pred = 1 if m_sim >= threshold else 0
+        if true_label == 1:
+            stats["minhash"]["tp" if m_pred == 1 else "fn"] += 1
+        else:
+            stats["minhash"]["fp" if m_pred == 1 else "tn"] += 1
 
-        # Estimate similarity
-        estimated_similarity = minhash_engine.estimate_similarity(sig_a, sig_b)
+        # ---- BENCHMARK SIMHASH ----
+        t0 = time.perf_counter()
+        fp_a = simhash_engine.compute_fingerprint(tokens_a)
+        fp_b = simhash_engine.compute_fingerprint(tokens_b)
+        s_sim = 1.0 - simhash_engine.hamming_distance(fp_a, fp_b)
+        stats["simhash"]["time"] += (time.perf_counter() - t0)
 
-        # Determine prediction (assuming threshold of 0.7 for similarity)
-        predicted_label = 1 if estimated_similarity >= 0.7 else 0
+        s_pred = 1 if s_sim >= threshold else 0
+        if true_label == 1:
+            stats["simhash"]["tp" if s_pred == 1 else "fn"] += 1
+        else:
+            stats["simhash"]["fp" if s_pred == 1 else "tn"] += 1
 
-        # Update metrics
-        if true_label == 1 and predicted_label == 1:
-            true_positives += 1
-        elif true_label == 0 and predicted_label == 1:
-            false_positives += 1
-        elif true_label == 0 and predicted_label == 0:
-            true_negatives += 1
-        elif true_label == 1 and predicted_label == 0:
-            false_negatives += 1
+        detailed_records.append({
+            "index": idx,
+            "true_label": true_label,
+            "minhash_similarity": round(m_sim, 4),
+            "minhash_prediction": m_pred,
+            "simhash_similarity": round(s_sim, 4),
+            "simhash_prediction": s_pred
+        })
 
-        results.append(
-            {
-                "index": idx,
-                "text_a": text_a[:50] + "..." if len(text_a) > 50 else text_a,
-                "text_b": text_b[:50] + "..." if len(text_b) > 50 else text_b,
-                "true_label": true_label,
-                "predicted_label": predicted_label,
-                "similarity": estimated_similarity,
-            }
-        )
-
-    # Calculate metrics
-    precision = (
-        true_positives / (true_positives + false_positives)
-        if (true_positives + false_positives) > 0
-        else 0
-    )
-    recall = (
-        true_positives / (true_positives + false_negatives)
-        if (true_positives + false_negatives) > 0
-        else 0
-    )
-    f1_score = (
-        2 * (precision * recall) / (precision + recall)
-        if (precision + recall) > 0
-        else 0
-    )
-
-    # Save detailed results
-    df_results = pd.DataFrame(results)
-
-    # Ensure directory exists for output file
+    # Export detailed record logs
     os.makedirs(os.path.dirname(output), exist_ok=True)
-    df_results.to_csv(output, index=False)
+    pd.DataFrame(detailed_records).to_csv(output, index=False)
 
-    # Save metrics to a separate file
-    metrics_output = "outputs/metrics.csv"
-    metrics_df = pd.DataFrame(
-        [
-            {
-                "precision": precision,
-                "recall": recall,
-                "f1_score": f1_score,
-                "true_positives": true_positives,
-                "false_positives": false_positives,
-                "true_negatives": true_negatives,
-                "false_negatives": false_negatives,
-            }
-        ]
-    )
+    # Compute summaries for outputs/metrics.csv
+    summary_metrics = []
+    for model_name, data_dict in stats.items():
+        tp, fp, fn, tn = data_dict["tp"], data_dict["fp"], data_dict["fn"], data_dict["tn"]
+        
+        precision = tp / (tp + fp) if (tp + fp) > 0 else 0.0
+        recall = tp / (tp + fn) if (tp + fn) > 0 else 0.0
+        f1 = 2 * (precision * recall) / (precision + recall) if (precision + recall) > 0 else 0.0
+        
+        summary_metrics.append({
+            "pipeline": model_name,
+            "threshold": threshold,
+            "precision": round(precision, 4),
+            "recall": round(recall, 4),
+            "f1_score": round(f1, 4),
+            "latency_seconds": round(data_dict["time"], 4),
+            "true_positives": tp,
+            "false_positives": fp,
+            "true_negatives": tn,
+            "false_negatives": fn
+        })
 
-    # Ensure directory exists for metrics file
-    os.makedirs(os.path.dirname(metrics_output), exist_ok=True)
-    metrics_df.to_csv(metrics_output, index=False)
+    metrics_df = pd.DataFrame(summary_metrics)
+    metrics_path = "outputs/metrics.csv" 
+    metrics_df.to_csv(metrics_path, index=False)
 
-    click.echo(f"Evaluation complete. Results saved to {output}")
-    click.echo(f"Metrics saved to {metrics_output}")
-    click.echo(
-        f"Precision: {precision:.3f}, Recall: {recall:.3f}, F1-Score: {f1_score:.3f}"
-    )
+    click.echo(f"\nEvaluation Complete. Results stored at: {output}")
+    click.echo(f"Comprehensive benchmarking log written directly to: {metrics_path} ")
+    print(metrics_df[['pipeline', 'precision', 'recall', 'f1_score', 'latency_seconds']].to_string(index=False))
+
 
 if __name__ == "__main__":
     cli()
