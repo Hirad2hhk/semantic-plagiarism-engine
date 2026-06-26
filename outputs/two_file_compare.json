@@ -1,0 +1,15 @@
+{
+  "metadata": {
+    "file_a": "data/raw/pan-plagiarism-corpus-2011/external-detection-corpus/suspicious-document/part1/suspicious-document00246.txt",
+    "file_b": "data/raw/pan-plagiarism-corpus-2011/external-detection-corpus/suspicious-document/part1/suspicious-document00291.txt",
+    "tokens_a": 1626,
+    "tokens_b": 2245
+  },
+  "path1_minhash": {
+    "estimated_jaccard": 0.0
+  },
+  "path2_simhash": {
+    "hamming_distance": 0.5312,
+    "cosine_similarity_estimate": 0.4688
+  }
+}
