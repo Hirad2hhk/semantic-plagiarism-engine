@@ -29,7 +29,7 @@ def compute_tfidf_weights(docs_content: List[str]) -> Dict[str, float]:
         for token in tokens:
             doc_frequencies[token] = doc_frequencies.get(token, 0) + 1
 
-    # Compute IDF: ln(Total Documents / Document Frequency containing term)
+    
     tfidf_weights = {}
     for token, df in doc_frequencies.items():
         tfidf_weights[token] = float(np.log(total_docs / df) + 1.0)
@@ -100,7 +100,7 @@ def compare(file_a, file_b, weights_path, output):
     fp_a = simhash_engine.compute_fingerprint(tokens_a)
     fp_b = simhash_engine.compute_fingerprint(tokens_b)
     
-    # SimHash Similarity = 1.0 - Normalised Hamming Distance 
+    
     h_dist = simhash_engine.hamming_distance(fp_a, fp_b)
     simhash_sim = 1.0 - h_dist
 
@@ -142,7 +142,7 @@ def corpus(data, threshold, shingle_size, engine, weights_path, output):
     docs = load_corpus_directory(data)
     click.echo(f"Loaded {len(docs)} documents ")
 
-    # Resolve TF-IDF if SimHash requested
+    
     tfidf_weights = None
     if engine in ['simhash', 'both']:
         if weights_path and os.path.exists(weights_path):
@@ -154,7 +154,7 @@ def corpus(data, threshold, shingle_size, engine, weights_path, output):
 
     results = []
 
-    # Process Path 1: MinHash + LSH 
+    
     if engine in ['minhash', 'both']:
         click.echo("Executing Path 1: Initializing MinHash structural sub-band buckets...")
         minhash_engine = MinHashEngine()
@@ -170,7 +170,7 @@ def corpus(data, threshold, shingle_size, engine, weights_path, output):
         for doc_a, doc_b, sim in minhash_pairs:
             results.append({"doc_a": doc_a, "doc_b": doc_b, "similarity": sim, "method": "MinHash+LSH"})
 
-    # Process Path 2: All-Pairs SimHash 
+    
     if engine in ['simhash', 'both']:
         click.echo("Executing Path 2: Constructing SimHash 64-bit signatures...")
         simhash_engine = SimHashEngine(tfidf_weights=tfidf_weights)
@@ -227,7 +227,7 @@ def pairs(pairs, threshold, text_col_a, text_col_b, label_col, limit, output):
     minhash_engine = MinHashEngine()
     simhash_engine = SimHashEngine(tfidf_weights=tfidf_weights)
 
-    # Performance metrics matrix configurations
+    
     stats = {
         "minhash": {"tp": 0, "fp": 0, "fn": 0, "tn": 0, "time": 0.0},
         "simhash": {"tp": 0, "fp": 0, "fn": 0, "tn": 0, "time": 0.0}
@@ -278,11 +278,11 @@ def pairs(pairs, threshold, text_col_a, text_col_b, label_col, limit, output):
             "simhash_prediction": s_pred
         })
 
-    # Export detailed record logs
+    
     os.makedirs(os.path.dirname(output), exist_ok=True)
     pd.DataFrame(detailed_records).to_csv(output, index=False)
 
-    # Compute summaries for outputs/metrics.csv
+    
     summary_metrics = []
     for model_name, data_dict in stats.items():
         tp, fp, fn, tn = data_dict["tp"], data_dict["fp"], data_dict["fn"], data_dict["tn"]

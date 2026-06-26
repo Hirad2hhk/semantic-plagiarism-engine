@@ -237,7 +237,7 @@ def preprocess_text(text: str) -> List[str]:
     text = re.sub(r"[^a-z0-9 ]", " ", text)
     tokens = [t.strip() for t in text.split() if t.strip()]
 
-    return tokens[:50_000]  # Prevent extremely long inputs
+    return tokens[:50_000]  
 
 
 def tokenize(text: str) -> List[str]:
@@ -251,7 +251,7 @@ def tokenize(text: str) -> List[str]:
     """
     tokens = preprocess_text(text)
 
-    # Remove stopwords
+    
     filtered_tokens = [token for token in tokens if token not in STOPWORDS]
 
     return filtered_tokens

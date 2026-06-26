@@ -1,2 +1,3 @@
-precision,recall,f1_score,true_positives,false_positives,true_negatives,false_negatives
-0.5,1.0,0.6666666666666666,1,1,0,0
+pipeline,threshold,precision,recall,f1_score,latency_seconds,true_positives,false_positives,true_negatives,false_negatives
+minhash,0.7,1.0,0.3667,0.5366,0.0087,11,0,30,19
+simhash,0.7,1.0,0.7,0.8235,0.0045,21,0,30,9
