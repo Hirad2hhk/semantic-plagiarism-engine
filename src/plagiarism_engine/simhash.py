@@ -6,7 +6,6 @@ class SimHashEngine:
         self.hash_bits = 64
     def _hash_token(self, token: str) -> int:
         """Helper to generate a deterministic 64-bit hash for a token"""
-        # Take the first 8 bytes (64 bits) of a MD5 hash
         hasher = hashlib.md5(token.encode('utf-8'))
         return int(hasher.hexdigest()[:16], 16)    
         
@@ -15,19 +14,15 @@ class SimHashEngine:
         v = [0.0] * self.hash_bits
                 
         for token in tokens:
-            # Get weight (default to 1.0 if not in TF-IDF dictionary)
             weight = self.weights.get(token, 1.0)
             token_hash = self._hash_token(token)
                     
-            # 2 & 3. For each bit, add or subtract the weight
             for i in range(self.hash_bits):
-                # Check if the i-th bit of token_hash is set to 1
                 if (token_hash >> i) & 1:
                     v[i] += weight
                 else:
                     v[i] -= weight
                             
-            # 4. Convert the 64-dimensional vector into a single 64-bit integer fingerprint
         fingerprint = 0
         for i in range(self.hash_bits):
             if v[i] > 0:
