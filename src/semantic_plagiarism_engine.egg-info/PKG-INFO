@@ -1,0 +1,167 @@
+Metadata-Version: 2.4
+Name: semantic-plagiarism-engine
+Version: 0.1.0
+Summary: An educational implementation for detecting semantic plagiarism and near-duplicate content using advanced techniques like MinHash, SimHash, and TF-IDF weighting.
+Home-page: https://github.com/hirad2hhk/semantic-plagiarism-engine
+Author: Hirad2hhk
+Author-email: Hirad2hhk <hirad2hhk@example.com>
+License: MIT
+Project-URL: Homepage, https://github.com/hirad2hhk/semantic-plagiarism-engine
+Project-URL: Repository, https://github.com/hirad2hhk/semantic-plagiarism-engine
+Classifier: Development Status :: 4 - Beta
+Classifier: Intended Audience :: Developers
+Classifier: License :: OSI Approved :: MIT License
+Classifier: Programming Language :: Python :: 3
+Classifier: Programming Language :: Python :: 3.11
+Classifier: Programming Language :: Python :: 3.12
+Requires-Python: >=3.11
+Description-Content-Type: text/markdown
+Requires-Dist: numpy>=1.20
+Requires-Dist: pandas>=1.3
+Requires-Dist: click>=8.1
+Requires-Dist: pytest>=7.0
+Provides-Extra: dev
+Requires-Dist: pytest>=7.0; extra == "dev"
+Requires-Dist: black>=22.0; extra == "dev"
+Requires-Dist: flake8>=4.0; extra == "dev"
+Requires-Dist: mypy>=0.950; extra == "dev"
+Dynamic: author
+Dynamic: home-page
+Dynamic: requires-python
+
+# Semantic Plagiarism Detection Engine
+
+An educational implementation for detecting semantic plagiarism and near-duplicate content using advanced techniques like MinHash, SimHash, and TF-IDF weighting.
+
+## Overview
+
+This plagiarism detection engine provides multiple approaches to identify duplicated or near-duplicated content in text documents:
+- **MinHash + LSH**: Fast structural similarity detection using locality-sensitive hashing
+- **SimHash**: Semantic similarity detection using TF-IDF weighted hash signatures
+
+## Installation
+
+### Prerequisites
+Python 3.11+
+
+
+
+### Using pip
+```bash
+# Install dependencies
+python -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+pip install -e .
+```
+
+
+## CLI Usage Examples
+
+### 1. Training TF-IDF Weights
+
+```bash
+python -m plagiarism_engine.cli train-weights \
+  --data data/raw/pan-plagiarism-corpus-2011/external-detection-corpus/suspicious-document/part1 \
+  --output outputs/tfidf_weights.json
+```
+
+### 2. Comparing Two Individual Files
+
+```bash
+python -m plagiarism_engine.cli compare \
+  --file-a data/raw/pan-plagiarism-corpus-2011/external-detection-corpus/suspicious-document/part1/suspicious-document00246.txt \
+  --file-b data/raw/pan-plagiarism-corpus-2011/external-detection-corpus/suspicious-document/part1/suspicious-document00291.txt \
+  --weights-path outputs/tfidf_weights.json \
+  --output outputs/two_file_compare.json
+```
+
+### 3. Corpus Analysis with MinHash
+
+```bash
+python -m plagiarism_engine.cli corpus \
+  --data data/raw/pan-plagiarism-corpus-2011/external-detection-corpus/suspicious-document/part1 \
+  --threshold 0.25 \
+  --shingle-size 3 \
+  --engine minhash \
+  --output outputs/candidates_minhash.csv
+```
+
+### 4. Corpus Analysis with SimHash
+
+```bash
+python -m plagiarism_engine.cli corpus \
+  --data data/raw/pan-plagiarism-corpus-2011/external-detection-corpus/suspicious-document/part1 \
+  --threshold 0.65 \
+  --engine simhash \
+  --weights-path outputs/tfidf_weights.json \
+  --output outputs/candidates_simhash.csv
+```
+
+### 5. Corpus Analysis with Both Engines
+
+```bash
+python -m plagiarism_engine.cli corpus \
+  --data data/raw/pan-plagiarism-corpus-2011/external-detection-corpus/suspicious-document/part1 \
+  --threshold 0.30 \
+  --engine both \
+  --weights-path outputs/tfidf_weights.json \
+  --output outputs/candidates.csv
+```
+
+## Available Commands
+
+### `train-weights`
+Pre-calculates corpus-wide IDF weights to drive high-fidelity TF-IDF weighting inside the SimHash pipeline.
+
+**Options:**
+- `--data`: Directory containing the background corpus (required)
+- `--output`: Path to save vocabulary weights (default: data/processed/tfidf_weights.json)
+
+### `compare`
+Compare two individual text files using both MinHash and SimHash algorithms.
+
+**Options:**
+- `--file-a`: Path to first text file (required)
+- `--file-b`: Path to second text file (required)
+- `--weights-path`: Optional path to precomputed tfidf json weights
+- `--output`: Output results JSON (- for stdout, default: -)
+
+### `corpus`
+Analyze entire directory to map candidate matches.
+
+**Options:**
+- `--data`: Directory of text files (required)
+- `--threshold`: Similarity threshold (default: 0.25)
+- `--shingle-size`: Shingle size (default: 3)
+- `--engine`: Which engine pipeline to use (minhash, simhash, or both) (default: minhash)
+- `--weights-path`: Path to json file holding TF-IDF lookup data (default: data/processed/tfidf_weights.json)
+- `--output`: CSV output file path (required)
+
+### `pairs`
+Run an empirical side-by-side verification benchmark over both engineering paths.
+
+**Options:**
+- `--pairs`: CSV file with text fields and target tags (required)
+- `--threshold`: Similarity boundary used for classification (default: 0.7)
+- `--text-col-a`: Column key for first text field (default: text_a)
+- `--text-col-b`: Column key for second text field (default: text_b)
+- `--label-col`: Column tracking ground truth binary labels (default: label)
+- `--limit`: Maximum number of rows to pull (default: None)
+- `--output`: Detailed predictions target path (required)
+
+## Data Sources
+
+The project uses the PAN Plagiarism Corpus 2011, which includes:
+- Suspicious documents (potential plagiarized content)
+- Source documents (original content)
+- Ground truth labels for evaluation
+
+Sample data is located in `data/raw/pan-plagiarism-corpus-2011/`.
+
+## Development
+
+### Running Tests
+```bash
+# Run all tests (note: some environment issues may exist in some setups)
+python -m pytest tests/
